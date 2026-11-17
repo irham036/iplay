@@ -3,6 +3,9 @@ name: Build APK
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,16 +18,27 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.11.1"
-      - name: Cek API key
+      - name: Siapkan API key (secret, atau file "Api key yt" untuk tes)
         env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          SECRET_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: |
-          if [ -z "$YOUTUBE_API_KEY" ]; then echo "Secret YOUTUBE_API_KEY belum diisi"; exit 1; fi
+          K="$SECRET_KEY"
+          if [ -z "$K" ] && [ -f "Api key yt" ]; then K=$(tr -d ' \r\n' < "Api key yt"); fi
+          if [ -n "$K" ]; then echo "::add-mask::$K"; fi
+          echo "YOUTUBE_API_KEY=$K" >> "$GITHUB_ENV"
       - name: Build debug APK
-        env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Siapkan file
+        run: cp app/build/outputs/apk/debug/app-debug.apk TubeYou.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: iplay-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: tubeyou-apk
+          path: TubeYou.apk
+      - name: Rilis (link unduh langsung)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: TubeYou - build terbaru
+          body: "Build otomatis dari commit ${{ github.sha }}"
+          files: TubeYou.apk
+          make_latest: true
