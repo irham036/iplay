@@ -33,20 +33,72 @@ object YouTubeApi {
         "mencekam", "merinding", "creepypasta", "possessed", "kesurupan", "exorcis", "nightmare"
     )
 
+    private val KIDS = listOf(
+        "anak", "kids", "kid ", "children", "child", "kartun", "cartoon", "lagu", "dongeng",
+        "edukasi", "educational", "belajar", "learn", "nursery", "balita", "toddler", "sains",
+        "science", "paud", "hewan", "animal", "nussa", "upin", "riko", "omar", "hana", "pinkfong",
+        "bobo", "abc", "alphabet", "berhitung", "mewarnai", "coloring", "story for kids", "fabel"
+    )
+
+    fun isKids(text: String): Boolean {
+        val t = text.lowercase()
+        return KIDS.any { t.contains(it) } && !isHorror(t)
+    }
+
+    /** Lolos jika cocok dengan salah satu kelompok yang diizinkan orang tua. */
+    fun accept(text: String, groups: Set<String>): Boolean =
+        "umum" in groups || ("horor" in groups && isHorror(text)) || ("anak" in groups && isKids(text))
+
     fun isHorror(text: String): Boolean {
         val t = text.lowercase()
         return HORROR.any { t.contains(it) }
     }
 
-    /** Pencarian pengguna selalu dipaksa ke ranah horor. */
-    fun horrorQuery(q: String): String =
-        if (isHorror(q)) q else "$q horor"
+    /** Pencarian pengguna diarahkan sesuai kelompok yang diizinkan. */
+    fun scopedQuery(q: String, groups: Set<String>): String = when {
+        "umum" in groups -> q
+        groups == setOf("horor") -> if (isHorror(q)) q else "$q horor"
+        groups == setOf("anak") -> if (isKids(q)) q else "$q untuk anak"
+        else -> q
+    }
 
-    suspend fun search(query: String, pageToken: String? = null): Page = withContext(Dispatchers.IO) {
+    private fun safe(groups: Set<String>) = when {
+        "umum" in groups -> "moderate"
+        "horor" in groups -> "none"
+        else -> "strict"
+    }
+
+    /** Video populer Indonesia (hanya untuk kelompok Umum). */
+    suspend fun popular(pageToken: String? = null): Page = withContext(Dispatchers.IO) {
+        val key = BuildConfig.YT_API_KEY
+        if (key.isBlank()) error("API key YouTube belum diisi saat build")
+        val json = JSONObject(get("$BASE/videos?part=snippet,contentDetails,statistics&chart=mostPopular" +
+            "&regionCode=ID&maxResults=25&key=$key" + (pageToken?.let { "&pageToken=$it" } ?: "")))
+        val items = json.optJSONArray("items")
+        val list = mutableListOf<Video>()
+        if (items != null) for (i in 0 until items.length()) {
+            val it = items.getJSONObject(i)
+            val sn = it.optJSONObject("snippet") ?: continue
+            val id = it.optString("id")
+            val th = sn.optJSONObject("thumbnails")
+            list += Video(
+                id = id,
+                title = decode(sn.optString("title")),
+                channel = decode(sn.optString("channelTitle")),
+                thumb = th?.optJSONObject("high")?.optString("url") ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg",
+                published = sn.optString("publishedAt"),
+                duration = fmtDuration(it.optJSONObject("contentDetails")?.optString("duration").orEmpty()),
+                views = fmtViews(it.optJSONObject("statistics")?.optString("viewCount").orEmpty()),
+            )
+        }
+        Page(list, json.optString("nextPageToken").ifEmpty { null })
+    }
+
+    suspend fun search(query: String, pageToken: String? = null, groups: Set<String>): Page = withContext(Dispatchers.IO) {
         val key = BuildConfig.YT_API_KEY
         if (key.isBlank()) error("API key YouTube belum diisi saat build")
         val url = "$BASE/search?part=snippet&type=video&maxResults=25&regionCode=ID" +
-            "&videoEmbeddable=true&q=${enc(query)}&key=$key" +
+            "&safeSearch=${safe(groups)}&videoEmbeddable=true&q=${enc(query)}&key=$key" +
             (pageToken?.let { "&pageToken=$it" } ?: "")
         val json = JSONObject(get(url))
         val items = json.optJSONArray("items")
@@ -58,7 +110,7 @@ object YouTubeApi {
             if (id.isEmpty()) continue
             val title = decode(sn.optString("title"))
             val desc = sn.optString("description")
-            if (!isHorror("$title $desc ${sn.optString("channelTitle")}")) continue
+            if (!accept("$title $desc ${sn.optString("channelTitle")}", groups)) continue
             val th = sn.optJSONObject("thumbnails")
             val thumb = th?.optJSONObject("high")?.optString("url")
                 ?: th?.optJSONObject("medium")?.optString("url")

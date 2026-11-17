@@ -1,6 +1,10 @@
 # iPlay
 
-Aplikasi Android ala YouTube yang hanya menampilkan konten **horor & jump scare** dari YouTube.
+Aplikasi Android (HP & Android TV/TV box) ala YouTube dengan kontrol orang tua dari VPS.
+
+- Kategori: **Anak**, **Horor**, **Umum** — dibuka/ditutup dari halaman motoris `/admin/iplay` (tanpa PIN di aplikasi).
+- Batas waktu tonton harian per perangkat, tambah waktu / kunci dari VPS.
+- Mendukung remot TV (D-pad, OK, Back, tombol media).
 
 - Sumber data: YouTube Data API v3 (pencarian dipaksa ke kata kunci horor + filter judul/deskripsi).
 - Pemutar: YouTube IFrame resmi (android-youtube-player).
