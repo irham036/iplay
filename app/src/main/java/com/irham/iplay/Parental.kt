@@ -41,6 +41,12 @@ object Parental {
         private set
     var online by mutableStateOf(false)
         private set
+    /** API key YouTube dari VPS (bisa diganti di halaman admin tanpa build ulang). */
+    var ytKey by mutableStateOf("")
+        private set
+    /** true setelah percobaan sinkron pertama selesai. */
+    var ready by mutableStateOf(false)
+        private set
 
     private lateinit var prefs: SharedPreferences
     private var date = ""
@@ -65,6 +71,7 @@ object Parental {
         resetAt = prefs.getLong("resetAt", 0L)
         date = prefs.getString("date", "") ?: ""
         usedSec = prefs.getInt("used", 0)
+        ytKey = prefs.getString("ytKey", "") ?: ""
         rollover()
     }
 
@@ -105,6 +112,7 @@ object Parental {
             .putLong("unlock", unlockUntil).putBoolean("lock", lockNow)
             .putLong("offset", offset).putLong("resetAt", resetAt)
             .putString("date", date).putInt("used", usedSec)
+            .putString("ytKey", ytKey)
             .apply()
     }
 
@@ -135,6 +143,7 @@ object Parental {
                 txt?.let { JSONObject(it) }
             }.getOrNull()
         }
+        ready = true
         if (res == null) {
             online = false
             return
@@ -150,6 +159,7 @@ object Parental {
         extraMin = res.optInt("extraMin", 0)
         unlockUntil = res.optLong("unlockUntil", 0L)
         lockNow = res.optBoolean("lockNow", false)
+        res.optString("ytKey").takeIf { it.isNotBlank() }?.let { ytKey = it }
         val serverReset = res.optLong("resetAt", 0L)
         val serverUsed = res.optInt("usedSec", 0)
         if (res.optString("date") == date) {

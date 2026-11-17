@@ -25,6 +25,8 @@ data class Page(val videos: List<Video>, val next: String?)
 object YouTubeApi {
     private const val BASE = "https://www.googleapis.com/youtube/v3"
 
+    private fun apiKey(): String = Parental.ytKey.ifBlank { BuildConfig.YT_API_KEY }
+
     /** Kata kunci wajib: video hanya tampil jika judul/deskripsi mengandung salah satunya. */
     private val HORROR = listOf(
         "horor", "horror", "seram", "serem", "hantu", "jump scare", "jumpscare", "scary",
@@ -70,8 +72,8 @@ object YouTubeApi {
 
     /** Video populer Indonesia (hanya untuk kelompok Umum). */
     suspend fun popular(pageToken: String? = null): Page = withContext(Dispatchers.IO) {
-        val key = BuildConfig.YT_API_KEY
-        if (key.isBlank()) error("API key YouTube belum diisi saat build")
+        val key = apiKey()
+        if (key.isBlank()) error("API key YouTube belum ada. Isi di halaman VPS lalu buka ulang aplikasi.")
         val json = JSONObject(get("$BASE/videos?part=snippet,contentDetails,statistics&chart=mostPopular" +
             "&regionCode=ID&maxResults=25&key=$key" + (pageToken?.let { "&pageToken=$it" } ?: "")))
         val items = json.optJSONArray("items")
@@ -95,8 +97,8 @@ object YouTubeApi {
     }
 
     suspend fun search(query: String, pageToken: String? = null, groups: Set<String>): Page = withContext(Dispatchers.IO) {
-        val key = BuildConfig.YT_API_KEY
-        if (key.isBlank()) error("API key YouTube belum diisi saat build")
+        val key = apiKey()
+        if (key.isBlank()) error("API key YouTube belum ada. Isi di halaman VPS lalu buka ulang aplikasi.")
         val url = "$BASE/search?part=snippet&type=video&maxResults=25&regionCode=ID" +
             "&safeSearch=${safe(groups)}&videoEmbeddable=true&q=${enc(query)}&key=$key" +
             (pageToken?.let { "&pageToken=$it" } ?: "")
