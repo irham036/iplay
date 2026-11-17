@@ -7,6 +7,11 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Bundle
+import android.speech.RecognizerIntent
+import android.view.KeyEvent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -113,7 +118,25 @@ fun isTvDevice(ctx: Context): Boolean {
         ctx.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
 }
 
+/** Sinyal dari tombol remot (mic/cari) ke UI. */
+object UiBus {
+    var voiceReq by mutableIntStateOf(0)
+}
+
 class MainActivity : ComponentActivity() {
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_SEARCH || keyCode == KeyEvent.KEYCODE_VOICE_ASSIST) {
+            UiBus.voiceReq++
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onSearchRequested(): Boolean {
+        UiBus.voiceReq++
+        return true
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val tv = isTvDevice(this)
@@ -198,6 +221,10 @@ fun App(tv: Boolean) {
     var playing by remember { mutableStateOf<Video?>(null) }
     var queue by remember { mutableStateOf<List<Video>>(emptyList()) }
     var refresh by remember { mutableIntStateOf(0) }
+    var autoVoice by remember { mutableStateOf(false) }
+    LaunchedEffect(UiBus.voiceReq) {
+        if (UiBus.voiceReq > 0) { playing = null; searching = true; autoVoice = true }
+    }
 
     val groups = Parental.groups
     val cats = remember(groups) { ALL_CATS.filter { it.group in groups } }
@@ -248,7 +275,7 @@ fun App(tv: Boolean) {
         AppContent(
             tv, store, feeds, cats, catIdx, { cat = it }, tab, { tab = it }, searching, { searching = it },
             searchText, { searchText = it }, searchFeed, { searchFeed = it }, playing, { playing = it },
-            queue, refresh, { refresh++ }, play,
+            queue, refresh, { refresh++ }, play, autoVoice, { autoVoice = it },
         )
         val b = banner
         if (b != null) {
@@ -273,7 +300,7 @@ fun AppContent(
     tab: Int, setTab: (Int) -> Unit, searching: Boolean, setSearching: (Boolean) -> Unit,
     searchText: String, setSearchText: (String) -> Unit, searchFeed: Feed?, setSearchFeed: (Feed?) -> Unit,
     playing: Video?, setPlaying: (Video?) -> Unit, queue: List<Video>, refresh: Int, bump: () -> Unit,
-    play: (Video, List<Video>) -> Unit,
+    play: (Video, List<Video>) -> Unit, autoVoice: Boolean, setAutoVoice: (Boolean) -> Unit,
 ) {
     val groups = Parental.groups
 
@@ -305,10 +332,13 @@ fun AppContent(
                 onSubmit = submit,
                 onBack = { setSearching(false) },
                 onPlay = play,
+                autoVoice = autoVoice,
+                onVoiceUsed = { setAutoVoice(false) },
             )
         }
         tv -> TvHome(
             tab = tab, onTab = { setTab(it); bump() }, onSearch = { setSearching(true) },
+            onVoice = { setSearching(true); setAutoVoice(true) },
             cats = cats, cat = catIdx, onCat = setCat, feed = homeFeed,
             store = store, refresh = refresh, onPlay = play,
         )
@@ -414,6 +444,7 @@ fun TopBar(onSearch: () -> Unit) {
         IconButton(onClick = {}) { Icon(Icons.Filled.Cast, "Transmisi", tint = Color.White) }
         IconButton(onClick = {}) { Icon(Icons.Outlined.Notifications, "Notifikasi", tint = Color.White) }
         IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, "Cari", tint = Color.White) }
+        IconButton(onClick = { UiBus.voiceReq++ }) { Icon(Icons.Filled.Mic, "Cari dengan suara", tint = Color.White) }
     }
 }
 
@@ -489,7 +520,7 @@ fun TvTab(label: String, selected: Boolean, fr: FocusRequester? = null, onClick:
 
 @Composable
 fun TvHome(
-    tab: Int, onTab: (Int) -> Unit, onSearch: () -> Unit,
+    tab: Int, onTab: (Int) -> Unit, onSearch: () -> Unit, onVoice: () -> Unit,
     cats: List<Cat>, cat: Int, onCat: (Int) -> Unit, feed: Feed?,
     store: Store, refresh: Int, onPlay: (Video, List<Video>) -> Unit,
 ) {
@@ -501,6 +532,7 @@ fun TvHome(
             Spacer(Modifier.width(20.dp))
             TvTab("Beranda", tab == 0, first) { onTab(0) }
             TvTab("Cari", false) { onSearch() }
+            TvTab("🎤 Cari suara", false) { onVoice() }
             TvTab("Tersimpan", tab == 1) { onTab(1) }
             TvTab("Riwayat", tab == 2) { onTab(2) }
             Spacer(Modifier.weight(1f))
@@ -584,10 +616,31 @@ fun SearchScreen(
     onSubmit: (String) -> Unit,
     onBack: () -> Unit,
     onPlay: (Video, List<Video>) -> Unit,
+    autoVoice: Boolean = false,
+    onVoiceUsed: () -> Unit = {},
 ) {
+    val ctx = LocalContext.current
     val focus = remember { FocusRequester() }
     val kb = LocalSoftwareKeyboardController.current
-    LaunchedEffect(Unit) { if (feed == null) runCatching { focus.requestFocus() } }
+    // Pencarian suara (Google voice / mic remot TV)
+    val voiceLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val said = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (!said.isNullOrBlank()) { onText(said); onSubmit(said) }
+    }
+    val startVoice: () -> Unit = {
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "id-ID")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Sebutkan video yang ingin dicari")
+        }
+        runCatching { voiceLauncher.launch(i) }.onFailure {
+            Toast.makeText(ctx, "Pencarian suara tidak tersedia di perangkat ini", Toast.LENGTH_LONG).show()
+        }
+    }
+    LaunchedEffect(autoVoice) {
+        if (autoVoice) { onVoiceUsed(); startVoice() }
+        else if (feed == null) runCatching { focus.requestFocus() }
+    }
     val hint = when {
         "umum" in Parental.groups -> "Cari video"
         Parental.groups == setOf("horor") -> "Cari video horor"
@@ -624,6 +677,12 @@ fun SearchScreen(
             )
             IconButton(onClick = { kb?.hide(); onSubmit(text) }, modifier = Modifier.focusRing(CircleShape)) {
                 Icon(Icons.Filled.Search, "Cari", tint = Color.White)
+            }
+            IconButton(
+                onClick = { kb?.hide(); startVoice() },
+                modifier = Modifier.focusRing(CircleShape).clip(CircleShape).background(Chip),
+            ) {
+                Icon(Icons.Filled.Mic, "Cari dengan suara", tint = Color.White)
             }
         }
         if (feed != null) key(feed) { VideoList(feed, onPlay, if (tv) 4 else 1) }
