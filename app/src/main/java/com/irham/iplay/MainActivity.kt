@@ -222,6 +222,11 @@ fun App(tv: Boolean) {
     var queue by remember { mutableStateOf<List<Video>>(emptyList()) }
     var refresh by remember { mutableIntStateOf(0) }
     var autoVoice by remember { mutableStateOf(false) }
+    // Laporan tontonan langsung + perintah jarak jauh dari halaman orang tua.
+    LaunchedEffect(Unit) {
+        Live.onClose = { playing = null }
+        Live.loop()
+    }
     LaunchedEffect(UiBus.voiceReq) {
         if (UiBus.voiceReq > 0) { playing = null; searching = true; autoVoice = true }
     }
@@ -782,6 +787,7 @@ fun TvPlayer(v: Video, store: Store, onBack: () -> Unit) {
                         descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
                         enableAutomaticInitialization = false
                         activity.lifecycle.addObserver(this)
+                        addYouTubePlayerListener(Live.listener(v))
                         val opts = IFramePlayerOptions.Builder(c)
                             .controls(0).rel(0).ivLoadPolicy(3).autoplay(1).build()
                         initialize(object : AbstractYouTubePlayerListener() {
@@ -803,6 +809,7 @@ fun TvPlayer(v: Video, store: Store, onBack: () -> Unit) {
                     }
                 },
                 onRelease = {
+                    Live.detach(v.id)
                     activity.lifecycle.removeObserver(it)
                     it.release()
                 },
@@ -977,6 +984,7 @@ fun PlayerScreen(v: Video, queue: List<Video>, store: Store, onPlay: (Video) -> 
                         YouTubePlayerView(c).apply {
                             enableAutomaticInitialization = false
                             activity.lifecycle.addObserver(this)
+                            addYouTubePlayerListener(Live.listener(v))
                             addFullscreenListener(object : FullscreenListener {
                                 override fun onEnterFullscreen(fullscreenView: View, exitFullscreen: () -> Unit) {
                                     fullView = fullscreenView
@@ -1001,6 +1009,7 @@ fun PlayerScreen(v: Video, queue: List<Video>, store: Store, onPlay: (Video) -> 
                         }
                     },
                     onRelease = {
+                        Live.detach(v.id)
                         activity.lifecycle.removeObserver(it)
                         it.release()
                     },
