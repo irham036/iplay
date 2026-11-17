@@ -20,9 +20,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
@@ -52,9 +55,10 @@ fun NightAnimation(modifier: Modifier = Modifier) {
             // Bulan sabit
             val r = size.minDimension * 0.09f
             val mc = Offset(size.width * 0.8f, size.height * 0.18f + bob.dp.toPx())
-            drawCircle(Color(0x33FFE08A), r * 1.6f, mc)
-            drawCircle(Color(0xFFFFE08A), r, mc)
-            drawCircle(Color(0xFF0E1230), r * 0.82f, mc + Offset(r * 0.5f, -r * 0.25f))
+            val moon = Path().apply { addOval(Rect(mc, r)) }
+            val cut = Path().apply { addOval(Rect(mc + Offset(r * 0.5f, -r * 0.25f), r * 0.82f)) }
+            val crescent = Path().apply { op(moon, cut, PathOperation.Difference) }
+            drawPath(crescent, Color(0xFFFFE08A))
 
             // Awan tidur
             val cx = size.width / 2f
