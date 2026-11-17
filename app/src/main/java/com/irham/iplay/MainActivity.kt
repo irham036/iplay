@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -117,6 +118,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val tv = isTvDevice(this)
         Parental.init(this, tv)
+        Sounds.init(this)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -129,6 +131,11 @@ class MainActivity : ComponentActivity() {
                 )
             ) { App(tv) }
         }
+    }
+
+    override fun onDestroy() {
+        if (isFinishing) Sounds.shutdown()
+        super.onDestroy()
     }
 }
 
@@ -146,6 +153,9 @@ class Feed(private val loader: suspend (String?) -> Page) {
         if (!reset && loaded && next == null) return
         loading = true
         error = null
+        // Tunggu sinkron pertama dengan VPS (untuk mengambil API key), maks 10 detik.
+        var w = 0
+        while (!Parental.ready && Parental.ytKey.isBlank() && w < 50) { delay(200); w++ }
         try {
             val p = loader(if (reset) null else next)
             if (reset) { videos.clear(); pages = 0 }
@@ -211,11 +221,61 @@ fun App(tv: Boolean) {
 
     val play: (Video, List<Video>) -> Unit = { v, q -> playing = v; queue = q }
 
+    // Peringatan menjelang waktu habis (5 & 1 menit) dengan bunyi + suara.
+    val remMin = if (Parental.unlimited || Parental.lockNow) -1 else (Parental.remainingSec + 59) / 60
+    var warned by remember { mutableStateOf(setOf<Int>()) }
+    var banner by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(remMin) {
+        if ((remMin == 5 || remMin == 1) && remMin !in warned) {
+            warned = warned + remMin
+            val msg = "Waktu nonton tinggal $remMin menit lagi"
+            banner = msg
+            Sounds.chime()
+            delay(1300)
+            Sounds.speak("$msg ya.")
+            delay(6000)
+            banner = null
+        }
+    }
+
     if (Parental.locked) {
         LaunchedEffect(Unit) { playing = null }
         LockScreen(tv)
         return
     }
+
+    Box(Modifier.fillMaxSize()) {
+        AppContent(
+            tv, store, feeds, cats, catIdx, { cat = it }, tab, { tab = it }, searching, { searching = it },
+            searchText, { searchText = it }, searchFeed, { searchFeed = it }, playing, { playing = it },
+            queue, refresh, { refresh++ }, play,
+        )
+        val b = banner
+        if (b != null) {
+            Text(
+                "⏰ $b",
+                color = Color.White, fontSize = if (tv) 20.sp else 15.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 64.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Red)
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun AppContent(
+    tv: Boolean, store: Store, feeds: MutableMap<String, Feed>, cats: List<Cat>, catIdx: Int, setCat: (Int) -> Unit,
+    tab: Int, setTab: (Int) -> Unit, searching: Boolean, setSearching: (Boolean) -> Unit,
+    searchText: String, setSearchText: (String) -> Unit, searchFeed: Feed?, setSearchFeed: (Feed?) -> Unit,
+    playing: Video?, setPlaying: (Video?) -> Unit, queue: List<Video>, refresh: Int, bump: () -> Unit,
+    play: (Video, List<Video>) -> Unit,
+) {
+    val groups = Parental.groups
 
     val current = playing
     val homeFeed = cats.getOrNull(catIdx)?.let { c -> feeds.getOrPut(c.label) { feedFor(c) } }
@@ -223,38 +283,38 @@ fun App(tv: Boolean) {
         if (q.isNotBlank()) {
             val g = groups
             val query = YouTubeApi.scopedQuery(q.trim(), g)
-            searchFeed = Feed { token -> YouTubeApi.search(query, token, g) }
+            setSearchFeed(Feed { token -> YouTubeApi.search(query, token, g) })
         }
     }
     when {
         current != null -> {
-            if (tv) TvPlayer(current, store, onBack = { playing = null; refresh++ })
+            if (tv) TvPlayer(current, store, onBack = { setPlaying(null); bump() })
             else PlayerScreen(
                 v = current, queue = queue, store = store,
-                onPlay = { playing = it },
-                onBack = { playing = null; refresh++ },
+                onPlay = { setPlaying(it) },
+                onBack = { setPlaying(null); bump() },
             )
         }
         searching -> {
-            BackHandler { searching = false }
+            BackHandler { setSearching(false) }
             SearchScreen(
                 tv = tv,
                 text = searchText,
-                onText = { searchText = it },
+                onText = setSearchText,
                 feed = searchFeed,
                 onSubmit = submit,
-                onBack = { searching = false },
+                onBack = { setSearching(false) },
                 onPlay = play,
             )
         }
         tv -> TvHome(
-            tab = tab, onTab = { tab = it; refresh++ }, onSearch = { searching = true },
-            cats = cats, cat = catIdx, onCat = { cat = it }, feed = homeFeed,
+            tab = tab, onTab = { setTab(it); bump() }, onSearch = { setSearching(true) },
+            cats = cats, cat = catIdx, onCat = setCat, feed = homeFeed,
             store = store, refresh = refresh, onPlay = play,
         )
         else -> Scaffold(
             containerColor = Bg,
-            topBar = { TopBar(onSearch = { searching = true }) },
+            topBar = { TopBar(onSearch = { setSearching(true) }) },
             bottomBar = {
                 NavigationBar(containerColor = Bg) {
                     val colors = NavigationBarItemDefaults.colors(
@@ -263,12 +323,12 @@ fun App(tv: Boolean) {
                     )
                     listOf(
                         Triple("Beranda", Icons.Filled.Home, 0),
-                        Triple("Tersimpan", Icons.Filled.VideoLibrary, 1),
-                        Triple("Riwayat", Icons.Filled.History, 2),
+                        Triple("Tersimpan", Icons.Filled.Subscriptions, 1),
+                        Triple("Anda", Icons.Filled.AccountCircle, 2),
                     ).forEach { (label, icon, i) ->
                         NavigationBarItem(
                             selected = tab == i,
-                            onClick = { tab = i; refresh++ },
+                            onClick = { setTab(i); bump() },
                             icon = { Icon(icon, null) },
                             label = { Text(label, fontSize = 11.sp) },
                             colors = colors,
@@ -279,7 +339,7 @@ fun App(tv: Boolean) {
         ) { pad ->
             Box(Modifier.padding(pad).fillMaxSize()) {
                 when (tab) {
-                    0 -> HomeScreen(cats, catIdx, { cat = it }, homeFeed, play)
+                    0 -> HomeScreen(cats, catIdx, setCat, homeFeed, play)
                     1 -> SavedScreen(false, store, Store.SAVED, refresh, "Belum ada video tersimpan", play)
                     else -> SavedScreen(false, store, Store.HISTORY, refresh, "Riwayat tontonan kosong", play)
                 }
@@ -307,31 +367,38 @@ fun TimeBadge() {
 fun LockScreen(tv: Boolean) {
     val scope = rememberCoroutineScope()
     val fr = remember { FocusRequester() }
-    LaunchedEffect(Unit) { if (tv) runCatching { fr.requestFocus() } }
-    Column(
-        Modifier.fillMaxSize().background(Bg).padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Logo()
-        Spacer(Modifier.height(32.dp))
-        Text("🌙", fontSize = 64.sp)
-        Spacer(Modifier.height(16.dp))
-        Text(
-            if (Parental.lockNow) "Aplikasi sedang dikunci" else "Waktu nonton hari ini sudah habis",
-            color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Ayo istirahat, bermain, atau membaca buku dulu.\nMinta Ayah/Bunda kalau ingin menambah waktu.",
-            color = Sub, fontSize = 15.sp, textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(24.dp))
-        Button(
-            onClick = { scope.launch { Parental.sync(null) } },
-            colors = ButtonDefaults.buttonColors(containerColor = Chip, contentColor = Color.White),
-            modifier = Modifier.focusRequester(fr).focusRing(RoundedCornerShape(24.dp)),
-        ) { Text("Cek lagi") }
+    val title = if (Parental.lockNow) "Aplikasi sedang dikunci" else "Waktu nonton hari ini sudah habis"
+    LaunchedEffect(Unit) {
+        if (tv) runCatching { fr.requestFocus() }
+        Sounds.chime(down = true)
+        delay(1600)
+        Sounds.speak("$title. Ayo istirahat dulu ya. Sampai jumpa besok!")
+    }
+    Box(Modifier.fillMaxSize()) {
+        NightAnimation(Modifier.fillMaxSize())
+        Column(
+            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Logo()
+            Spacer(Modifier.height(if (tv) 12.dp else 32.dp))
+            Text(
+                title,
+                color = Color.White, fontSize = if (tv) 30.sp else 24.sp, fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Ayo istirahat, bermain, atau membaca buku dulu.\nMinta Ayah/Bunda kalau ingin menambah waktu.",
+                color = Color(0xFFD6D8F0), fontSize = if (tv) 18.sp else 15.sp, textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.weight(1f))
+            Button(
+                onClick = { scope.launch { Parental.sync(null) } },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FFFFFF), contentColor = Color.White),
+                modifier = Modifier.focusRequester(fr).focusRing(RoundedCornerShape(24.dp)),
+            ) { Text("Cek lagi") }
+        }
     }
 }
 
@@ -344,6 +411,8 @@ fun TopBar(onSearch: () -> Unit) {
         Logo()
         Spacer(Modifier.weight(1f))
         TimeBadge()
+        IconButton(onClick = {}) { Icon(Icons.Filled.Cast, "Transmisi", tint = Color.White) }
+        IconButton(onClick = {}) { Icon(Icons.Outlined.Notifications, "Notifikasi", tint = Color.White) }
         IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, "Cari", tint = Color.White) }
     }
 }
@@ -356,7 +425,7 @@ fun Logo() {
             contentAlignment = Alignment.Center,
         ) { Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
         Spacer(Modifier.width(4.dp))
-        Text("iPlay", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = (-0.5).sp)
+        Text("TubeYou", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = (-0.8).sp)
     }
 }
 
@@ -913,7 +982,7 @@ fun PlayerScreen(v: Video, queue: List<Video>, store: Store, onPlay: (Video) -> 
                         }
                     }
                     HorizontalDivider(color = Chip)
-                    Text("Video horor lainnya", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(12.dp))
+                    Text("Video lainnya", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(12.dp))
                 }
                 items(queue.filter { it.id != v.id }, key = { it.id }) { o ->
                     CompactCard(o, onClick = { onPlay(o) })
