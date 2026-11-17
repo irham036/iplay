@@ -46,7 +46,7 @@ object Sounds {
                 if (ttsReady) {
                     tts?.setSpeechRate(0.9f)
                     tts?.setPitch(1.15f)
-                    pending?.let { speak(it) }
+                    pending?.let { ttsSpeak(it) }
                 }
                 pending = null
             }
@@ -75,7 +75,7 @@ object Sounds {
             val f = File(dir ?: return@thread, "$name.mp3").takeIf { it.exists() && it.length() > 1000 }
                 ?: runCatching { download(name) }.getOrNull()
             main.post {
-                if (f == null) { speak(fallback); return@post }
+                if (f == null) { ttsSpeak(fallback); return@post }
                 runCatching {
                     player?.release()
                     player = MediaPlayer().apply {
@@ -90,7 +90,7 @@ object Sounds {
                         prepare()
                         start()
                     }
-                }.onFailure { speak(fallback) }
+                }.onFailure { ttsSpeak(fallback) }
             }
         }
     }
@@ -103,7 +103,20 @@ object Sounds {
         ttsReady = false
     }
 
+    /** Pengumuman: pakai rekaman suara natural bila teksnya dikenali, selain itu TTS. */
     fun speak(text: String) {
+        val t = text.lowercase()
+        val name = when {
+            "tinggal 5 menit" in t -> "warn_5"
+            "tinggal 1 menit" in t -> "warn_1"
+            "dikunci" in t -> "lock_kunci"
+            "sudah habis" in t -> "lock_habis"
+            else -> null
+        }
+        if (name != null) voice(name, text) else ttsSpeak(text)
+    }
+
+    private fun ttsSpeak(text: String) {
         val t = tts ?: return
         if (!ttsReady) { pending = text; return }
         t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "tubeyou")
